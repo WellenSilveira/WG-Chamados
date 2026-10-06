@@ -14,14 +14,26 @@ app.setAppUserModelId(
     ? 'com.squirrel.wg_chamados.WG Chamados'
     : 'com.wgchamados.desktop'
 );
-app.setPath('userData', path.join(app.getPath('appData'), 'iniciacao'));
+const legacyDataDir = path.join(app.getPath('appData'), 'iniciacao');
+app.setPath('userData', path.join(app.getPath('appData'), 'WG Chamados'));
 const dataDir = app.getPath('userData');
 const databasePath = path.join(dataDir, 'chamados-local-db.json');
 const previousDatabasePath = path.join(dataDir, 'pixie-local-db.json');
+const legacyDatabasePaths = [
+  path.join(legacyDataDir, 'chamados-local-db.json'),
+  path.join(legacyDataDir, 'pixie-local-db.json'),
+];
 
 function ensureDatabaseFile() {
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
+  }
+
+  if (!fs.existsSync(databasePath)) {
+    const legacyDatabasePath = legacyDatabasePaths.find((filePath) => fs.existsSync(filePath));
+    if (legacyDatabasePath) {
+      fs.copyFileSync(legacyDatabasePath, databasePath);
+    }
   }
 
   if (!fs.existsSync(databasePath) && fs.existsSync(previousDatabasePath)) {
