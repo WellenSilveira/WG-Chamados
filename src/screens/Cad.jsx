@@ -199,6 +199,15 @@ export default function Cadastro({ onSaved, onGoToLogin, departments = [], first
           >
             {firstRun ? "Criar administrador" : "Salvar"}
           </button>
+          {!firstRun && (
+            <button
+              type="button"
+              onClick={onGoToLogin}
+              className="w-full rounded border border-white/70 py-2.5 font-medium text-cyan-50 hover:bg-white/10 sm:col-span-2"
+            >
+              Voltar ao login
+            </button>
+          )}
           </form>
         )}
       </section>
