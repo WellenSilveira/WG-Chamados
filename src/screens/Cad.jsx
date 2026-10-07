@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import appLogo from "../assets/atom (2).png";
+import { isValidCpf } from "../lib/cpf.js";
 
 function formatarCPF(value) {
   const digits = value.replace(/\D/g, "").slice(0, 11);
@@ -16,6 +17,7 @@ export default function Cadastro({ onSaved, onGoToLogin, departments = [], first
   const [enviado, setEnviado] = useState(false);
   const [senha, setSenha] = useState("");
   const [confirmarSenha, setConfirmarSenha] = useState("");
+  const [cpfErro, setCpfErro] = useState("");
 
   return (
     <main className="flex h-full min-h-0 w-full flex-col overflow-y-auto overscroll-contain bg-[#2a7b7e] px-4 py-3 sm:px-6 sm:py-5">
@@ -49,11 +51,14 @@ export default function Cadastro({ onSaved, onGoToLogin, departments = [], first
           <form
             onSubmit={async (event) => {
               event.preventDefault();
-              const data = Object.fromEntries(new FormData(event.currentTarget));
-              if (data.cpf.replace(/\D/g, "").length !== 11) {
-                setErro("Informe um CPF com 11 dígitos.");
+              const formData = new FormData(event.currentTarget);
+              const data = Object.fromEntries(formData);
+              data.privacyAccepted = formData.get("privacyAccepted") === "on";
+              if (!isValidCpf(data.cpf)) {
+                setCpfErro("CPF inválido. Confira os dígitos informados.");
                 return;
               }
+              setCpfErro("");
               if (firstRun && senha !== confirmarSenha) {
                 setErro("A confirmação de senha não corresponde.");
                 return;
@@ -98,11 +103,21 @@ export default function Cadastro({ onSaved, onGoToLogin, departments = [], first
               maxLength={14}
               required
               placeholder="000.000.000-00"
+              aria-invalid={Boolean(cpfErro)}
               className="w-full min-w-0 rounded border bg-white px-3 py-2"
               onChange={(event) => {
                 event.target.value = formatarCPF(event.target.value);
+                setCpfErro("");
+              }}
+              onBlur={(event) => {
+                if (!isValidCpf(event.target.value)) {
+                  setCpfErro("CPF inválido. Confira os dígitos informados.");
+                } else {
+                  setCpfErro("");
+                }
               }}
             />
+            {cpfErro && <span role="alert" className="text-xs text-red-100">{cpfErro}</span>}
           </div>
 
           <div className="flex min-w-0 flex-col gap-1">
@@ -186,6 +201,22 @@ export default function Cadastro({ onSaved, onGoToLogin, departments = [], first
               </div>
             </>
           )}
+
+          <div className="space-y-2 rounded border border-white/20 bg-white/10 p-3 text-cyan-50 sm:col-span-2">
+            <p className="text-xs">
+              Aviso de privacidade: os dados informados serão usados para identificação e gestão de acesso ao WG Chamados, armazenados localmente neste dispositivo e acessíveis aos administradores do sistema.
+            </p>
+            <label htmlFor="privacyAccepted" className="flex items-start gap-2 text-sm">
+              <input
+                id="privacyAccepted"
+                name="privacyAccepted"
+                type="checkbox"
+                required
+                className="mt-0.5 h-4 w-4 shrink-0 accent-slate-800"
+              />
+              Li e estou ciente do aviso de privacidade (LGPD).
+            </label>
+          </div>
 
           {erro && (
             <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 sm:col-span-2">

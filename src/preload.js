@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("electronAPI", {
   getData: () => ipcRenderer.invoke("db:get"),
   saveData: (payload) => ipcRenderer.invoke("db:save", payload),
+  hashPassword: (password) => ipcRenderer.invoke("auth:hash", password),
+  verifyPassword: (password, storedHash) => ipcRenderer.invoke("auth:verify", password, storedHash),
   getDatabasePath: () => ipcRenderer.invoke("db:path"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),

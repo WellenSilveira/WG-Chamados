@@ -5,6 +5,7 @@ import AdminDashboard from "./screens/Adm.jsx";
 import Resolutor from "./screens/Resolutor.jsx";
 import UserDashboard from "./screens/User.jsx";
 import { buildDefaultDatabase, loadLocalDatabase, saveLocalDatabase } from "./lib/db.js";
+import { isValidCpf } from "./lib/cpf.js";
 
 const LOCAL_DATA_RESET_VERSION = 2;
 
@@ -50,6 +51,11 @@ function openAssignmentCountFor(tickets, resolverId) {
 
 function isTicketClosed(ticket) {
   return ["FECHADO", "SOLUCIONADO", "RESOLVIDO"].includes(ticket.status);
+}
+
+function withoutPasswordCredentials(userRecord) {
+  const { senha, senhaHash, ...safeUser } = userRecord;
+  return safeUser;
 }
 
 export default function App() {
@@ -120,10 +126,10 @@ export default function App() {
           sessionUser.profile !== "Pendente";
         const databaseWithSession = {
           ...initialDatabase,
-          currentUser: canResumeSession ? sessionUser : null,
+          currentUser: canResumeSession ? { id: sessionUser.id } : null,
         };
         await saveLocalDatabase(databaseWithSession);
-        setUser(databaseWithSession.currentUser);
+        setUser(canResumeSession ? withoutPasswordCredentials(sessionUser) : null);
         setTickets(normalizedAssignmentTickets);
         setSettings(databaseWithSession.settings);
         setAuditLogs(databaseWithSession.auditLogs);
@@ -192,12 +198,14 @@ export default function App() {
   const handleLogin = async (nextUser) => {
     const database = await loadLocalDatabase();
     const lastLoginAt = new Date().toISOString();
-    const updatedUser = { ...nextUser, lastLoginAt };
+    const savedUser = (database.users ?? []).find((item) => item.id === nextUser.id);
+    if (!savedUser) throw new Error("A conta não foi encontrada no banco local.");
+    const updatedUser = { ...savedUser, lastLoginAt };
     const nextUsers = (database.users ?? []).map((item) =>
       item.id === updatedUser.id ? updatedUser : item
     );
-    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: updatedUser });
-    setUser(updatedUser);
+    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: { id: updatedUser.id } });
+    setUser(withoutPasswordCredentials(updatedUser));
   };
 
   const handleSaveProfile = async (profileChanges) => {
@@ -205,7 +213,10 @@ export default function App() {
       throw new Error("Para alterar seus dados cadastrais, abra um chamado para a administração.");
     }
     const database = await loadLocalDatabase();
+    const savedUser = database.users.find((item) => item.id === user.id);
+    if (!savedUser) throw new Error("A conta não foi encontrada no banco local.");
     const updatedUser = {
+      ...savedUser,
       ...user,
       email: profileChanges.email.trim(),
       telefone: profileChanges.telefone.trim(),
@@ -214,23 +225,24 @@ export default function App() {
     const nextUsers = (database.users ?? []).map((item) =>
       item.id === updatedUser.id ? updatedUser : item
     );
-    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: updatedUser });
-    setUser(updatedUser);
+    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: { id: updatedUser.id } });
+    setUser(withoutPasswordCredentials(updatedUser));
   };
 
   const handleSavePreferences = async (preferences) => {
     const database = await loadLocalDatabase();
-    const updatedUser = { ...user, preferences };
+    const savedUser = database.users.find((item) => item.id === user.id);
+    if (!savedUser) throw new Error("A conta não foi encontrada no banco local.");
+    const updatedUser = { ...savedUser, ...user, preferences };
     const nextUsers = (database.users ?? []).map((item) =>
       item.id === updatedUser.id ? updatedUser : item
     );
-    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: updatedUser });
-    setUser(updatedUser);
+    await saveLocalDatabase({ ...database, users: nextUsers, currentUser: { id: updatedUser.id } });
+    setUser(withoutPasswordCredentials(updatedUser));
   };
 
   const handleChangePassword = async ({ currentPassword, newPassword }) => {
     const minimumLength = Number(settings.security?.minimumPasswordLength) || 8;
-    if (user?.senha !== currentPassword) return "A senha atual não confere.";
     if (newPassword.length < minimumLength) {
       return `A nova senha precisa ter pelo menos ${minimumLength} caracteres.`;
     }
@@ -239,9 +251,14 @@ export default function App() {
     }
 
     const database = await loadLocalDatabase();
+    const savedUser = database.users.find((item) => item.id === user.id);
+    if (!savedUser) throw new Error("A conta não foi encontrada no banco local.");
+    if (!await window.electronAPI.verifyPassword(currentPassword, savedUser.senhaHash ?? "")) {
+      return "A senha atual não confere.";
+    }
     const updatedUser = {
-      ...user,
-      senha: newPassword,
+      ...savedUser,
+      senhaHash: await window.electronAPI.hashPassword(newPassword),
       mustChangePassword: false,
       passwordChangeRequired: false,
     };
@@ -260,10 +277,10 @@ export default function App() {
     await saveLocalDatabase({
       ...database,
       users: nextUsers,
-      currentUser: updatedUser,
+      currentUser: { id: updatedUser.id },
       auditLogs: auditLogsNext,
     });
-    setUser(updatedUser);
+    setUser(withoutPasswordCredentials(updatedUser));
     setAuditLogs(auditLogsNext);
     return "";
   };
@@ -455,7 +472,9 @@ export default function App() {
       throw new Error("Status de disponibilidade inválido.");
     }
     const database = await loadLocalDatabase();
-    const updatedUser = { ...user, resolverStatus };
+    const savedUser = database.users.find((item) => item.id === user.id);
+    if (!savedUser) throw new Error("A conta não foi encontrada no banco local.");
+    const updatedUser = { ...savedUser, ...user, resolverStatus };
     const nextUsers = (database.users ?? []).map((item) =>
       item.id === updatedUser.id ? updatedUser : item
     );
@@ -477,10 +496,10 @@ export default function App() {
     await saveLocalDatabase({
       ...database,
       users: nextUsers,
-      currentUser: updatedUser,
+      currentUser: { id: updatedUser.id },
       auditLogs: nextAuditLogs,
     });
-    setUser(updatedUser);
+    setUser(withoutPasswordCredentials(updatedUser));
     setAuditLogs(nextAuditLogs);
     if (resolverStatus === "AUSENTE" && openAssignments.length) {
       const admins = nextUsers.filter((item) => item.profile === "Administrador");
@@ -512,6 +531,12 @@ export default function App() {
 
   const handleRegister = async (details) => {
     const database = await loadLocalDatabase();
+    if (!isValidCpf(details.cpf)) {
+      return "CPF inválido. Confira os dígitos informados.";
+    }
+    if (details.privacyAccepted !== true) {
+      return "É necessário confirmar que leu o aviso de privacidade para continuar.";
+    }
     const cpfDigits = details.cpf.replace(/\D/g, "");
     const users = database.users ?? [];
     if (users.some((item) => item.cpf?.replace(/\D/g, "") === cpfDigits)) {
@@ -534,7 +559,8 @@ export default function App() {
         departamento: details.setor.trim(),
         cargo: details.cargo.trim(),
         dataAniversario: details.dataAniversario,
-        senha: details.password,
+        senhaHash: await window.electronAPI.hashPassword(details.password),
+        privacyAcceptedAt: new Date().toISOString(),
         profile: "Administrador",
         status: "ATIVO",
         createdAt: new Date().toISOString(),
@@ -557,6 +583,7 @@ export default function App() {
       profile: "Pendente",
       status: "PENDENTE",
       createdAt: new Date().toISOString(),
+      privacyAcceptedAt: new Date().toISOString(),
     };
     await saveLocalDatabase({ ...database, users: [...users, newUser] });
     return "";

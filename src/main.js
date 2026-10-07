@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification } from 'electron';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
@@ -23,6 +24,47 @@ const legacyDatabasePaths = [
   path.join(legacyDataDir, 'chamados-local-db.json'),
   path.join(legacyDataDir, 'pixie-local-db.json'),
 ];
+
+function hashPasswordSync(password) {
+  const salt = crypto.randomBytes(16);
+  const derivedKey = crypto.scryptSync(password, salt, 64);
+  return `scrypt$${salt.toString('hex')}$${derivedKey.toString('hex')}`;
+}
+
+function verifyPasswordSync(password, storedHash) {
+  const match = /^scrypt\$([a-f0-9]{32})\$([a-f0-9]{128})$/i.exec(storedHash);
+  if (!match) return false;
+
+  const salt = Buffer.from(match[1], 'hex');
+  const expected = Buffer.from(match[2], 'hex');
+  const actual = crypto.scryptSync(password, salt, expected.length);
+  return crypto.timingSafeEqual(actual, expected);
+}
+
+function sanitizeDatabase(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Os dados do banco local são inválidos.');
+  }
+
+  const users = (Array.isArray(payload.users) ? payload.users : []).map((user) => {
+    if (!user || typeof user !== 'object' || Array.isArray(user)) {
+      throw new Error('O registro de usuário no banco local é inválido.');
+    }
+    const { senha: legacyPassword, senhaHash, ...safeUser } = user;
+    if (/^scrypt\$[a-f0-9]{32}\$[a-f0-9]{128}$/i.test(senhaHash ?? '')) {
+      return { ...safeUser, senhaHash };
+    }
+    if (typeof legacyPassword === 'string' && legacyPassword.length > 0) {
+      return { ...safeUser, senhaHash: hashPasswordSync(legacyPassword) };
+    }
+    return safeUser;
+  });
+  const currentUser = payload.currentUser?.id
+    ? { id: String(payload.currentUser.id) }
+    : null;
+
+  return { ...payload, users, currentUser };
+}
 
 function ensureDatabaseFile() {
   if (!fs.existsSync(dataDir)) {
@@ -56,21 +98,9 @@ function ensureDatabaseFile() {
 function readDatabase() {
   ensureDatabaseFile();
   const raw = fs.readFileSync(databasePath, 'utf-8');
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed && Object.keys(parsed).length) {
-      if (parsed.settings?.appName === 'Pixie OS') {
-        parsed.settings.appName = 'WG Chamados';
-        writeDatabase(parsed);
-      }
-      return parsed;
-    }
-    return {
-      currentUser: null,
-      users: [],
-      tickets: [],
-      settings: { appName: 'WG Chamados', offlineMode: true },
-    };
+    parsed = JSON.parse(raw);
   } catch {
     return {
       currentUser: null,
@@ -79,18 +109,47 @@ function readDatabase() {
       settings: { appName: 'WG Chamados', offlineMode: true },
     };
   }
+  if (!parsed || !Object.keys(parsed).length) {
+    return {
+      currentUser: null,
+      users: [],
+      tickets: [],
+      settings: { appName: 'WG Chamados', offlineMode: true },
+    };
+  }
+  if (parsed.settings?.appName === 'Pixie OS') {
+    parsed.settings.appName = 'WG Chamados';
+  }
+  const normalized = sanitizeDatabase(parsed);
+  if (JSON.stringify(normalized) !== JSON.stringify(parsed)) {
+    writeDatabase(normalized);
+  }
+  return normalized;
 }
 
 function writeDatabase(payload) {
   ensureDatabaseFile();
-  fs.writeFileSync(databasePath, JSON.stringify(payload, null, 2), 'utf-8');
-  return payload;
+  const normalized = sanitizeDatabase(payload);
+  fs.writeFileSync(databasePath, JSON.stringify(normalized, null, 2), 'utf-8');
+  return normalized;
 }
 
 ipcMain.handle('db:get', () => readDatabase());
 ipcMain.handle('db:save', (_, payload) => {
-  writeDatabase(payload);
-  return createAutomaticBackupIfDue(payload);
+  const normalized = writeDatabase(payload);
+  return createAutomaticBackupIfDue(normalized);
+});
+ipcMain.handle('auth:hash', (_, password) => {
+  if (typeof password !== 'string' || !password) {
+    throw new Error('Informe uma senha válida para gerar o hash.');
+  }
+  return hashPasswordSync(password);
+});
+ipcMain.handle('auth:verify', (_, password, storedHash) => {
+  if (typeof password !== 'string' || typeof storedHash !== 'string') {
+    throw new Error('Os dados para verificação da senha são inválidos.');
+  }
+  return verifyPasswordSync(password, storedHash);
 });
 ipcMain.handle('db:path', () => databasePath);
 ipcMain.handle('window:minimize', (event) => {
@@ -152,8 +211,7 @@ ipcMain.handle('backup:restore', async () => {
   if (!restored || !Array.isArray(restored.users) || !Array.isArray(restored.tickets)) {
     throw new Error('O arquivo selecionado não parece ser um backup válido do WG Chamados.');
   }
-  writeDatabase(restored);
-  return restored;
+  return writeDatabase(restored);
 });
 
 function createAutomaticBackupIfDue(database) {

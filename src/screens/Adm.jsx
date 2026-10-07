@@ -9,6 +9,7 @@ import {
   ProfilePanel,
 } from "./User.jsx";
 import { buildDefaultDatabase, loadLocalDatabase, saveLocalDatabase } from "../lib/db.js";
+import { isValidCpf, maskCpf } from "../lib/cpf.js";
 
 const menuItems = [
   { label: "Dashboard", icon: "▦" },
@@ -482,7 +483,7 @@ export default function Adm({
 
   const filteredUsers = users.filter((item) => {
     const query = userSearch.trim().toLowerCase();
-    const searchable = [item.nome, item.email, item.cpf, item.departamento, item.cargo]
+    const searchable = [item.nome, item.email, role === "Administrador" ? item.cpf : maskCpf(item.cpf), item.departamento, item.cargo]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
@@ -623,8 +624,8 @@ export default function Adm({
     const formData = new FormData(form);
     const cpfDigits = newUserCpf.replace(/\D/g, "");
 
-    if (cpfDigits.length !== 11) {
-      setUserFormError("Informe um CPF com 11 dígitos.");
+    if (!isValidCpf(cpfDigits)) {
+      setUserFormError("CPF inválido. Confira os dígitos informados.");
       return;
     }
 
@@ -636,6 +637,14 @@ export default function Adm({
       return;
     }
 
+    const enteredPassword = formData.get("senha").toString();
+    if (!editingUser && !enteredPassword) {
+      setUserFormError("Informe uma senha inicial.");
+      return;
+    }
+    const passwordHash = enteredPassword
+      ? await window.electronAPI.hashPassword(enteredPassword)
+      : editingUser?.senhaHash;
     const savedUser = {
       ...editingUser,
       id: editingUser?.id ?? `user-${Date.now()}`,
@@ -645,12 +654,12 @@ export default function Adm({
       departamento: formData.get("departamento").toString().trim(),
       cargo: formData.get("cargo").toString().trim(),
       profile: formData.get("profile").toString(),
-      senha: formData.get("senha").toString(),
+      senhaHash: passwordHash,
       status: editingUser?.status ?? "ATIVO",
       createdAt: editingUser?.createdAt ?? new Date().toISOString(),
       lastLoginAt: editingUser?.lastLoginAt ?? null,
       mustChangePassword: editingUser
-        ? (editingUser.senha !== formData.get("senha").toString() || Boolean(editingUser.mustChangePassword))
+        ? (enteredPassword ? true : Boolean(editingUser.mustChangePassword))
         : true,
     };
     const nextUsers = editingUser
@@ -669,8 +678,9 @@ export default function Adm({
     if (!initialPassword) return;
 
     const database = await loadLocalDatabase();
+    const senhaHash = await window.electronAPI.hashPassword(initialPassword);
     const nextUsers = database.users.map((item) => item.id === targetUser.id
-      ? { ...item, profile, senha: initialPassword, mustChangePassword: true, status: "ATIVO", approvedAt: new Date().toISOString(), approvedBy: user?.id }
+      ? { ...item, profile, senhaHash, mustChangePassword: true, status: "ATIVO", approvedAt: new Date().toISOString(), approvedBy: user?.id }
       : item);
     await saveLocalDatabase({ ...database, users: nextUsers });
     setUsers(nextUsers);
@@ -1298,7 +1308,9 @@ export default function Adm({
                               </span>
                             </div>
                           </td>
-                          <td className="whitespace-nowrap px-3 py-3 font-mono text-[10.8px] text-slate-500">{item.cpf ?? "—"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 font-mono text-[10.8px] text-slate-500">
+                            {role === "Administrador" ? item.cpf ?? "—" : maskCpf(item.cpf)}
+                          </td>
                           <td className="whitespace-nowrap px-3 py-3">{item.departamento ?? "Não informado"}</td>
                           <td className="whitespace-nowrap px-3 py-3">{item.cargo ?? "Não informado"}</td>
                           <td className="whitespace-nowrap px-3 py-3">
@@ -1399,7 +1411,7 @@ export default function Adm({
                       </label>
                       <label className="flex flex-col gap-1 text-xs text-slate-600">
                         Senha inicial
-                        <input name="senha" type="password" defaultValue={editingUser?.senha ?? ""} required minLength={6} className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800" />
+                        <input name="senha" type="password" required={!editingUser} minLength={6} autoComplete="new-password" placeholder={editingUser ? "Deixe vazio para manter" : "Senha inicial"} className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800" />
                       </label>
                       {userFormError && <p className="text-xs text-red-600 sm:col-span-2">{userFormError}</p>}
                       <div className="flex justify-end gap-2 pt-2 sm:col-span-2">

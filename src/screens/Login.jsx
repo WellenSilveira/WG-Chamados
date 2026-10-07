@@ -64,7 +64,7 @@ export default function Login({ onLogin, onGoToCadastro }) {
         setErro("Este cadastro não foi aprovado. Entre em contato com o administrador.");
         return;
       }
-      if (usuario.senha !== senha) {
+      if (!await window.electronAPI.verifyPassword(senha, usuario.senhaHash ?? "")) {
         setErro("CPF ou senha inválidos. Tente novamente.");
         return;
       }
